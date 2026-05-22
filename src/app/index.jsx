@@ -21,7 +21,7 @@ export default function Index() {
   const router = useRouter();
   
   const handleGetStarted = () => {
-    router.push("/home");
+    router.push("/(tabs)/home");
   };
 
   const handleLogin = () => {
