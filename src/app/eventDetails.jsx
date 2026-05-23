@@ -46,6 +46,7 @@ const EventDetails = () => {
     Boolean(eventId && !initialEvent)
   );
   const [cancelling, setCancelling] = useState(false);
+  const [joining, setJoining] = useState(false);
 
   const showToast = (message) => {
     if (Platform.OS === "android") {
@@ -99,6 +100,20 @@ const EventDetails = () => {
       cancelled = true;
     };
   }, [eventId]);
+
+  const handleJoin = async () => {
+    if (!event?.event_code) return;
+    setJoining(true);
+    try {
+      const result = await eventsApi.join(event.event_code);
+      showToast(result.message || "Joined!");
+      setEvent(result.event);
+    } catch (e) {
+      showToast(e.message || "Could not join");
+    } finally {
+      setJoining(false);
+    }
+  };
 
   const handleCancel = () => {
     if (!eventId || event?.status === "cancelled") return;
@@ -161,6 +176,8 @@ const EventDetails = () => {
   });
   const day = date.getDate();
   const isCancelled = event.status === "cancelled";
+  const isCreator = event.is_creator;
+  const isJoined = event.is_joined;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -251,7 +268,37 @@ const EventDetails = () => {
             </Text>
           </View>
 
-          {!isCancelled && (
+          {isCreator && event.event_code && (
+            <View style={styles.codeBox}>
+              <Text style={styles.codeLabel}>
+                Event join code
+              </Text>
+              <Text style={styles.codeValue}>
+                {event.event_code}
+              </Text>
+              <Text style={styles.codeHint}>
+                Share this code so others can join your event.
+              </Text>
+            </View>
+          )}
+
+          {!isCancelled && !isCreator && !isJoined && event.event_code && (
+            <TouchableOpacity
+              style={styles.joinButton}
+              onPress={handleJoin}
+              disabled={joining}
+            >
+              {joining ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.joinButtonText}>
+                  Join Event
+                </Text>
+              )}
+            </TouchableOpacity>
+          )}
+
+          {!isCancelled && isCreator && (
             <>
               <View style={styles.divider} />
               <View style={styles.buttonRow}>
@@ -459,5 +506,41 @@ const styles = StyleSheet.create({
     textAlign: "center",
     marginTop: 40,
     color: "#7B8476",
+  },
+  codeBox: {
+    marginTop: 16,
+    backgroundColor: "#E8F0E3",
+    borderRadius: 14,
+    padding: 14,
+    alignItems: "center",
+  },
+  codeLabel: {
+    fontWeight: "700",
+    color: "#5E7C59",
+    fontSize: 14,
+  },
+  codeValue: {
+    fontSize: 32,
+    fontWeight: "800",
+    letterSpacing: 6,
+    color: "#445C43",
+    marginVertical: 8,
+  },
+  codeHint: {
+    fontSize: 12,
+    color: "#7B8476",
+    textAlign: "center",
+  },
+  joinButton: {
+    backgroundColor: "#8CC576",
+    paddingVertical: 16,
+    borderRadius: 16,
+    alignItems: "center",
+    marginTop: 18,
+  },
+  joinButtonText: {
+    color: "#fff",
+    fontWeight: "800",
+    fontSize: 18,
   },
 });

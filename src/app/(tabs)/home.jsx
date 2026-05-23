@@ -14,6 +14,7 @@ import { Calendar } from "react-native-calendars";
 import { router, useFocusEffect } from "expo-router";
 
 import EventCard from "../../../components/eventCard";
+import { useAuth } from "../../../contexts/AuthContext";
 import {
   eventsApi,
   formatDateParts,
@@ -43,7 +44,9 @@ const buildMarkedDates = (calendarData) => {
 };
 
 const HomeScreen = () => {
+  const { user } = useAuth();
   const now = new Date();
+  const firstName = user?.first_name || "there";
   const calendarRef = useRef({
     month: now.getMonth() + 1,
     year: now.getFullYear(),
@@ -130,7 +133,7 @@ const HomeScreen = () => {
               style={styles.avatar}
             />
             <View>
-              <Text style={styles.greeting}>Hi, John!</Text>
+              <Text style={styles.greeting}>Hi, {firstName}!</Text>
               <Text style={styles.subText}>
                 It's good to see you!{"\n"}
                 Ready for today's events?
@@ -183,6 +186,7 @@ const HomeScreen = () => {
             <QuickAction
               icon="calendar-outline"
               label="Participate Event"
+              onPress={() => router.push("/joinEvent")}
             />
             <QuickAction
               icon="refresh-outline"

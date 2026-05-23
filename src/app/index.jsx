@@ -21,12 +21,11 @@ export default function Index() {
   const router = useRouter();
   
   const handleGetStarted = () => {
-    router.push("/(tabs)/home");
+    router.push("/register");
   };
 
   const handleLogin = () => {
-    //add router for login page
-    console.log("Login");
+    router.push("/login");
   };
 
   return (
