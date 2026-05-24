@@ -7,6 +7,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
+import { formatStatusLabel, getAttendanceColors } from "../lib/api";
 
 const EventCard = ({
   month,
@@ -15,8 +16,12 @@ const EventCard = ({
   time,
   location,
   status,
+  attendanceStatus,
   event,
 }) => {
+  const badgeKey = attendanceStatus || status;
+  const badgeColors = getAttendanceColors(badgeKey);
+  const badgeLabel = formatStatusLabel(badgeKey);
   const handlePress = () => {
     router.push({
       pathname: "/eventDetails",
@@ -55,8 +60,17 @@ const EventCard = ({
       </View>
 
       <View style={styles.rightSide}>
-        <View style={styles.badge}>
-          <Text style={styles.badgeText}>{status}</Text>
+        <View
+          style={[
+            styles.badge,
+            { backgroundColor: badgeColors.bg },
+          ]}
+        >
+          <Text
+            style={[styles.badgeText, { color: badgeColors.text }]}
+          >
+            {badgeLabel}
+          </Text>
         </View>
         <Ionicons
           name="chevron-forward"

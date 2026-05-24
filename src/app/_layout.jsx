@@ -26,7 +26,8 @@ function AuthGate({ children }) {
       segments[0] === "eventDetails" ||
       segments[0] === "editevent" ||
       segments[0] === "eventhistory" ||
-      segments[0] === "joinEvent";
+      segments[0] === "joinEvent" ||
+      segments[0] === "eventParticipants";
 
     const atLanding =
       segments.length === 0 ||

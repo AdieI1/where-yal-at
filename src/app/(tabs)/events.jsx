@@ -22,8 +22,8 @@ import { COLORS } from "../../../constants/theme";
 
 const FILTERS = [
   { key: "all", label: "All" },
-  { key: "created", label: "Events you made" },
-  { key: "joined", label: "Events you joined" },
+  { key: "created", label: "Created" },
+  { key: "joined", label: "Joined" },
 ];
 
 export default function EventsScreen() {
@@ -52,9 +52,9 @@ export default function EventsScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>Events Page</Text>
+        <Text style={styles.title}>Events</Text>
         <Text style={styles.subtitle}>
-          View all the events you made and participated!
+          Upcoming and ongoing events you created or joined.
         </Text>
       </View>
 

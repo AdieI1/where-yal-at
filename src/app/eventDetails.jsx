@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -11,7 +11,7 @@ import {
   ToastAndroid,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useLocalSearchParams, router } from "expo-router";
+import { useLocalSearchParams, router, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 
 import ParticipantsList from "../../components/participantsList";
@@ -19,6 +19,7 @@ import {
   eventsApi,
   formatEventTime,
   formatStatusLabel,
+  formatTime12,
   routeParam,
 } from "../../lib/api";
 
@@ -42,11 +43,14 @@ const EventDetails = () => {
   const initialEvent = parseInitialEvent(params);
 
   const [event, setEvent] = useState(initialEvent);
-  const [loading, setLoading] = useState(
-    Boolean(eventId && !initialEvent)
-  );
+  const [myAttendance, setMyAttendance] = useState(null);
+  const [participantPreview, setParticipantPreview] = useState([]);
+  const [participantCount, setParticipantCount] = useState(0);
+  const [activeTab, setActiveTab] = useState("info");
+  const [loading, setLoading] = useState(Boolean(eventId && !initialEvent));
   const [cancelling, setCancelling] = useState(false);
   const [joining, setJoining] = useState(false);
+  const [actionSessionId, setActionSessionId] = useState(null);
 
   const showToast = (message) => {
     if (Platform.OS === "android") {
@@ -56,9 +60,32 @@ const EventDetails = () => {
     }
   };
 
-  useEffect(() => {
-    let cancelled = false;
+  const loadEvent = useCallback(async () => {
+    if (!eventId) return;
+    try {
+      const data = await eventsApi.get(eventId);
+      setEvent(data.event);
+      setMyAttendance(data.my_attendance || null);
+      setParticipantPreview(data.participant_preview || []);
+      setParticipantCount(
+        data.participant_count ?? data.event?.participant_count ?? 0
+      );
+    } catch (e) {
+      showToast(e.message || "Could not load event");
+    } finally {
+      setLoading(false);
+    }
+  }, [eventId]);
 
+  useFocusEffect(
+    useCallback(() => {
+      if (eventId) {
+        loadEvent();
+      }
+    }, [eventId, loadEvent])
+  );
+
+  useEffect(() => {
     if (!eventId) {
       setEvent({
         event_name: routeParam(params.title) || "Untitled Event",
@@ -71,35 +98,22 @@ const EventDetails = () => {
         sessions: [],
       });
       setLoading(false);
-      return;
     }
-
-    if (initialEvent) {
-      setLoading(false);
-      return;
-    }
-
-    (async () => {
-      try {
-        const data = await eventsApi.get(eventId);
-        if (!cancelled) {
-          setEvent(data.event);
-        }
-      } catch (e) {
-        if (!cancelled) {
-          showToast(e.message || "Could not load event");
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
   }, [eventId]);
+
+  const phase = event?.phase || event?.status;
+  const showSessions =
+    event?.is_joined &&
+    event?.status !== "cancelled" &&
+    (myAttendance?.sessions?.length ?? 0) > 0;
+
+  useEffect(() => {
+    if (showSessions && phase === "ongoing") {
+      setActiveTab("sessions");
+    } else if (!showSessions) {
+      setActiveTab("info");
+    }
+  }, [showSessions, phase]);
 
   const handleJoin = async () => {
     if (!event?.event_code) return;
@@ -107,11 +121,27 @@ const EventDetails = () => {
     try {
       const result = await eventsApi.join(event.event_code);
       showToast(result.message || "Joined!");
-      setEvent(result.event);
+      await loadEvent();
     } catch (e) {
       showToast(e.message || "Could not join");
     } finally {
       setJoining(false);
+    }
+  };
+
+  const handleTimeAction = async (sessionId, action) => {
+    setActionSessionId(sessionId);
+    try {
+      const result =
+        action === "in"
+          ? await eventsApi.timeIn(eventId, sessionId)
+          : await eventsApi.timeOut(eventId, sessionId);
+      showToast(result.message || "Updated");
+      await loadEvent();
+    } catch (e) {
+      showToast(e.message || "Action failed");
+    } finally {
+      setActionSessionId(null);
     }
   };
 
@@ -133,9 +163,7 @@ const EventDetails = () => {
               showToast("Event cancelled");
               router.replace("/(tabs)/home");
             } catch (e) {
-              showToast(
-                e.message || "Could not cancel event"
-              );
+              showToast(e.message || "Could not cancel event");
             } finally {
               setCancelling(false);
             }
@@ -160,9 +188,7 @@ const EventDetails = () => {
   if (!event) {
     return (
       <SafeAreaView style={styles.container}>
-        <Text style={styles.errorText}>
-          Event not found.
-        </Text>
+        <Text style={styles.errorText}>Event not found.</Text>
       </SafeAreaView>
     );
   }
@@ -170,14 +196,88 @@ const EventDetails = () => {
   const date = event.event_date
     ? new Date(`${event.event_date}T12:00:00`)
     : new Date();
-
-  const month = date.toLocaleString("default", {
-    month: "short",
-  });
+  const month = date.toLocaleString("default", { month: "short" });
   const day = date.getDate();
   const isCancelled = event.status === "cancelled";
   const isCreator = event.is_creator;
   const isJoined = event.is_joined;
+
+  const renderSessionCard = (sessionRow) => {
+    const att = sessionRow.attendance || {};
+    const hasTimedIn = Boolean(att.time_in);
+    const canTimeIn = att.can_time_in;
+    const canTimeOut = att.can_time_out;
+    const busy = actionSessionId === sessionRow.session_id;
+
+    let buttonLabel = "Time in";
+    let buttonStyle = styles.timeInButtonDisabled;
+    let onPress = null;
+    let disabled = true;
+
+    if (!hasTimedIn) {
+      buttonLabel = "Time in";
+      if (canTimeIn) {
+        buttonStyle = styles.timeInButton;
+        onPress = () =>
+          handleTimeAction(sessionRow.session_id, "in");
+        disabled = busy;
+      }
+    } else if (!att.time_out) {
+      buttonLabel = "Time out";
+      if (canTimeOut) {
+        buttonStyle = styles.timeOutButton;
+        onPress = () =>
+          handleTimeAction(sessionRow.session_id, "out");
+        disabled = busy;
+      } else {
+        buttonStyle = styles.timeOutButtonDisabled;
+      }
+    } else {
+      buttonLabel = "Completed";
+      buttonStyle = styles.timeOutButtonDisabled;
+    }
+
+    return (
+      <View key={sessionRow.session_id} style={styles.sessionCard}>
+        <View style={styles.sessionHeader}>
+          <Text style={styles.sessionTitle}>
+            {sessionRow.session_label}
+          </Text>
+          {att.is_active && (
+            <View style={styles.activeBadge}>
+              <Text style={styles.activeBadgeText}>Active</Text>
+            </View>
+          )}
+        </View>
+        <Text style={styles.sessionTime}>
+          {formatTime12(sessionRow.time_in)} -{" "}
+          {formatTime12(sessionRow.time_out)}
+        </Text>
+
+        {hasTimedIn && (
+          <Text style={styles.timedInLabel}>
+            Timed in at {att.time_in_display}
+          </Text>
+        )}
+
+        {!isCancelled && (
+          <TouchableOpacity
+            style={[styles.sessionButton, buttonStyle]}
+            onPress={onPress}
+            disabled={disabled || !onPress}
+          >
+            {busy ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.sessionButtonText}>
+                {buttonLabel}
+              </Text>
+            )}
+          </TouchableOpacity>
+        )}
+      </View>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -187,19 +287,12 @@ const EventDetails = () => {
             style={styles.backButton}
             onPress={() => router.back()}
           >
-            <Ionicons
-              name="arrow-back"
-              size={26}
-              color="#7B9B6A"
-            />
+            <Ionicons name="arrow-back" size={26} color="#7B9B6A" />
           </TouchableOpacity>
           <View>
-            <Text style={styles.headerTitle}>
-              Event Details
-            </Text>
+            <Text style={styles.headerTitle}>Event Details</Text>
             <Text style={styles.headerSubtitle}>
-              View all event details and attendance
-              information.
+              View all event details and attendance information.
             </Text>
           </View>
         </View>
@@ -211,12 +304,10 @@ const EventDetails = () => {
               <Text style={styles.dayText}>{day}</Text>
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.eventTitle}>
-                {event.event_name}
-              </Text>
+              <Text style={styles.eventTitle}>{event.event_name}</Text>
               <View style={styles.badge}>
                 <Text style={styles.badgeText}>
-                  {formatStatusLabel(event.status)}
+                  {formatStatusLabel(phase)}
                 </Text>
               </View>
             </View>
@@ -224,58 +315,86 @@ const EventDetails = () => {
 
           <View style={styles.divider} />
 
-          <Text style={styles.sectionTitle}>
-            Event information
-          </Text>
+          {showSessions && (
+            <View style={styles.tabs}>
+              <TouchableOpacity
+                style={[
+                  styles.tab,
+                  activeTab === "info" && styles.tabActive,
+                ]}
+                onPress={() => setActiveTab("info")}
+              >
+                <Text
+                  style={[
+                    styles.tabText,
+                    activeTab === "info" && styles.tabTextActive,
+                  ]}
+                >
+                  Info
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.tab,
+                  activeTab === "sessions" && styles.tabActive,
+                ]}
+                onPress={() => setActiveTab("sessions")}
+              >
+                <Text
+                  style={[
+                    styles.tabText,
+                    activeTab === "sessions" && styles.tabTextActive,
+                  ]}
+                >
+                  Sessions
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
 
-          <View style={styles.infoRow}>
-            <Text style={styles.label}>Event type:</Text>
-            <Text style={styles.value}>
-              {event.event_type || "Whole day"}
-            </Text>
-          </View>
-
-          <View style={styles.infoRow}>
-            <Text style={styles.label}>Date:</Text>
-            <Text style={styles.value}>
-              {date.toDateString()}
-            </Text>
-          </View>
-
-          <View style={styles.infoRow}>
-            <Text style={styles.label}>Time:</Text>
-            <Text style={styles.value}>
-              {formatEventTime(event)}
-            </Text>
-          </View>
-
-          <View style={styles.infoRow}>
-            <Text style={styles.label}>
-              Allow late check-in:
-            </Text>
-            <Text style={styles.value}>
-              {event.allow_late_checkin
-                ? "Allowed"
-                : "Not Allowed"}
-            </Text>
-          </View>
-
-          <View style={styles.infoRow}>
-            <Text style={styles.label}>Location:</Text>
-            <Text style={styles.value}>
-              {event.event_location ||
-                "No location provided"}
-            </Text>
-          </View>
+          {activeTab === "sessions" && showSessions ? (
+            <View>
+              <Text style={styles.sectionTitle}>Sessions</Text>
+              {myAttendance.sessions.map(renderSessionCard)}
+            </View>
+          ) : (
+            <>
+              <Text style={styles.sectionTitle}>Event information</Text>
+              <View style={styles.infoRow}>
+                <Text style={styles.label}>Event type:</Text>
+                <Text style={styles.value}>
+                  {event.event_type || "Whole day"}
+                </Text>
+              </View>
+              <View style={styles.infoRow}>
+                <Text style={styles.label}>Date:</Text>
+                <Text style={styles.value}>{date.toDateString()}</Text>
+              </View>
+              <View style={styles.infoRow}>
+                <Text style={styles.label}>Time:</Text>
+                <Text style={styles.value}>
+                  {formatEventTime(event)}
+                </Text>
+              </View>
+              <View style={styles.infoRow}>
+                <Text style={styles.label}>Allow late check-in:</Text>
+                <Text style={styles.value}>
+                  {event.allow_late_checkin ? "Allowed" : "Not Allowed"}
+                </Text>
+              </View>
+              <View style={styles.infoRow}>
+                <Text style={styles.label}>Location:</Text>
+                <Text style={styles.value}>
+                  {event.event_location || "No location provided"}
+                </Text>
+              </View>
+            </>
+          )}
 
           {isCreator && event.event_code && (
             <View style={styles.codeBox}>
-              <Text style={styles.codeLabel}>
-                Event join code
-              </Text>
-              <Text style={styles.codeValue}>
-                {event.event_code}
-              </Text>
+              <Text style={styles.codeLabel}>Event join code</Text>
+              <Text style={styles.codeValue}>{event.event_code}</Text>
               <Text style={styles.codeHint}>
                 Share this code so others can join your event.
               </Text>
@@ -291,9 +410,7 @@ const EventDetails = () => {
               {joining ? (
                 <ActivityIndicator color="#fff" />
               ) : (
-                <Text style={styles.joinButtonText}>
-                  Join Event
-                </Text>
+                <Text style={styles.joinButtonText}>Join Event</Text>
               )}
             </TouchableOpacity>
           )}
@@ -325,11 +442,8 @@ const EventDetails = () => {
                     size={18}
                     color="#fff"
                   />
-                  <Text style={styles.buttonText}>
-                    Edit details
-                  </Text>
+                  <Text style={styles.buttonText}>Edit details</Text>
                 </TouchableOpacity>
-
                 <TouchableOpacity
                   style={styles.cancelButton}
                   onPress={handleCancel}
@@ -338,9 +452,7 @@ const EventDetails = () => {
                   {cancelling ? (
                     <ActivityIndicator color="#fff" />
                   ) : (
-                    <Text style={styles.buttonText}>
-                      Cancel Event
-                    </Text>
+                    <Text style={styles.buttonText}>Cancel Event</Text>
                   )}
                 </TouchableOpacity>
               </View>
@@ -348,9 +460,15 @@ const EventDetails = () => {
           )}
         </View>
 
-        <View style={styles.card}>
-          <ParticipantsList />
-        </View>
+        {isCreator && (
+          <ParticipantsList
+            eventId={event.id}
+            eventName={event.event_name}
+            participants={participantPreview}
+            total={participantCount}
+            isCreator
+          />
+        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -445,6 +563,28 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     fontSize: 12,
   },
+  tabs: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 16,
+  },
+  tab: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 16,
+    backgroundColor: "#E8E4D8",
+  },
+  tabActive: {
+    backgroundColor: "#8CC576",
+  },
+  tabText: {
+    color: "#7B8476",
+    fontWeight: "600",
+  },
+  tabTextActive: {
+    color: "#fff",
+    fontWeight: "700",
+  },
   divider: {
     height: 1,
     backgroundColor: "#C7D2BF",
@@ -472,6 +612,67 @@ const styles = StyleSheet.create({
     color: "#7A7A7A",
     fontSize: 16,
     lineHeight: 22,
+  },
+  sessionCard: {
+    backgroundColor: "#F7F7F2",
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: "#C7D2BF",
+  },
+  sessionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  sessionTitle: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#445C43",
+  },
+  activeBadge: {
+    backgroundColor: "#DCE8CF",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  activeBadgeText: {
+    color: "#5E7C59",
+    fontWeight: "700",
+    fontSize: 11,
+  },
+  sessionTime: {
+    color: "#7B8476",
+    marginTop: 6,
+    marginBottom: 8,
+  },
+  timedInLabel: {
+    color: "#5E7C59",
+    fontWeight: "600",
+    marginBottom: 10,
+  },
+  sessionButton: {
+    paddingVertical: 14,
+    borderRadius: 14,
+    alignItems: "center",
+  },
+  sessionButtonText: {
+    color: "#fff",
+    fontWeight: "800",
+    fontSize: 16,
+  },
+  timeInButton: {
+    backgroundColor: "#8CC576",
+  },
+  timeInButtonDisabled: {
+    backgroundColor: "#B8B8B8",
+  },
+  timeOutButton: {
+    backgroundColor: "#8CC576",
+  },
+  timeOutButtonDisabled: {
+    backgroundColor: "#B8B8B8",
   },
   buttonRow: {
     flexDirection: "row",
